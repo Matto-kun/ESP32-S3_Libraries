@@ -19,6 +19,8 @@
 # Build artifacts and directories
 **/build/
 build/
+.devcontainer/
+.vscode/
 *.o
 *.a
 *.out
@@ -63,6 +65,7 @@ env/
 
 # Language Servers
 .clangd/
+.clangd
 .ccls-cache/
 compile_commands.json
 
@@ -76,5 +79,3 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
-.devcontainer/ # If using Dev Containers for development
-.vscode/ # If using vscode for development
