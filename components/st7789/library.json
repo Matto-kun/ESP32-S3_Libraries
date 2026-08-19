@@ -1,0 +1,25 @@
+{
+  "name": "st7789",
+  "version": "1.0.0",
+  "description": "LibDriver ST7789 TFT driver (vendored)",
+  "keywords": "st7789, display, spi",
+  "authors": {
+    "name": "Shifeng Li / LibDriver",
+    "url": "https://github.com/libdriver/st7789"
+  },
+  "license": "MIT",
+  "frameworks": "espidf",
+  "platforms": "espressif32",
+  "build": {
+    "includeDir": "src",
+    "flags": [
+      "-Iexample",
+      "-Iinterface"
+    ],
+    "srcFilter": [
+      "+<src/*.c>",
+      "+<example/*.c>",
+      "-<*>"
+    ]
+  }
+}

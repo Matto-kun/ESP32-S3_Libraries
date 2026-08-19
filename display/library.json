@@ -1,0 +1,23 @@
+{
+  "name": "esp32_s3_display",
+  "version": "1.0.0",
+  "description": "ESP32-S3 display API and layout (requires app-provided LibDriver st7789)",
+  "keywords": "esp32, display, st7789, espidf",
+  "authors": {
+    "name": "Mat RB"
+  },
+  "license": "MIT",
+  "frameworks": "espidf",
+  "platforms": "espressif32",
+  "dependencies": {
+    "ESP32-S3_Libraries": "*",
+    "st7789": "*"
+  },
+  "build": {
+    "includeDir": "../include",
+    "srcDir": "../src/display",
+    "srcFilter": [
+      "+<*>"
+    ]
+  }
+}

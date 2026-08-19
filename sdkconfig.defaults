@@ -1,0 +1,4 @@
+# Flash size matches the detected ESP32-S3 module (16 MB).
+# This does not affect ST7789 performance — only firmware image metadata / partitions.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"

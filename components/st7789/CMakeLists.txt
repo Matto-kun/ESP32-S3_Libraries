@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/driver_st7789.c"
+        "example/driver_st7789_basic.c"
+    INCLUDE_DIRS
+        "src"
+        "example"
+        "interface"
+)
