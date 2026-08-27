@@ -76,6 +76,7 @@ uint8_t st7789_interface_spi_init(void)
     cfg.clock_hz  = s_board.clock_hz;
     cfg.mode      = eSpiMode0;
     cfg.bit_order = eSpiBitOrderMsb;
+    /* Blocking TX with DMA (SPI_DMA_CH_AUTO in spi_api). Async queue deferred. */
     cfg.max_transfer = 4092;
     cfg.queue_size = 1U;
 

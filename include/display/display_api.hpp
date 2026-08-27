@@ -47,6 +47,19 @@ public:
     esp_err_t clear(uint16_t color = kColorBlack);
     esp_err_t fillRect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t color);
     esp_err_t drawString(uint16_t x, uint16_t y, const char* str, uint16_t color);
+
+    /**
+     * @brief Blit an RGB565 image into a panel window (blocking SPI).
+     * @param x0,y0 Top-left inclusive (0..239).
+     * @param x1,y1 Bottom-right inclusive (0..239).
+     * @param img   RGB565 buffer, column-major: img[x * H + y] where
+     *              W = x1-x0+1, H = y1-y0+1. Length must be W*H words.
+     * @note LibDriver ST7789 picture API uses column-major indexing.
+     *       Caller owns @p img for the duration of this call.
+     */
+    esp_err_t drawPicture16(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
+                            const uint16_t* img);
+
     esp_err_t setBacklight(bool on);
 
     bool isInited() const;

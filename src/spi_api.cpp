@@ -140,6 +140,7 @@ esp_err_t SPI::init()
     bus_cfg.max_transfer_sz = m_config.max_transfer;
 
     if (s_bus_refcount[idx] == 0U) {
+        /* DMA enabled; async multi-buffer TX queue deferred. */
         ESP_RETURN_ON_ERROR(
             spi_bus_initialize(esp_host, &bus_cfg, SPI_DMA_CH_AUTO),
             TAG, "Host %d spi_bus_initialize failed: %s",

@@ -152,6 +152,30 @@ esp_err_t Display::drawString(uint16_t x, uint16_t y, const char* str, uint16_t 
                : ESP_FAIL;
 }
 
+esp_err_t Display::drawPicture16(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
+                                 const uint16_t* img)
+{
+    if (!m_inited) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (img == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((x0 > x1) || (y0 > y1) || (x1 > 239U) || (y1 > 239U)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const uint8_t res = st7789_basic_draw_picture_16bits(
+        x0, y0, x1, y1, const_cast<uint16_t*>(img));
+    if (res != 0U) {
+        ESP_LOGE(TAG, "drawPicture16 failed (%u) [%u,%u]-[%u,%u]",
+                 (unsigned)res, (unsigned)x0, (unsigned)y0,
+                 (unsigned)x1, (unsigned)y1);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
 esp_err_t Display::setBacklight(bool on)
 {
     if (m_board.bl_pin < 0) {
