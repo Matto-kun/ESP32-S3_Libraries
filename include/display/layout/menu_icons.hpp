@@ -16,6 +16,7 @@
 #include "display/layout/screen_geom.hpp"
 #include "display/layout/menu_bar.hpp"
 #include "display/layout/sensor_menu.hpp"
+#include "display/layout/mag_live_menu.hpp"
 
 namespace display_layout {
 
@@ -291,6 +292,53 @@ static inline esp_err_t draw_sensor_menu_bar(Display& d, uint8_t selected,
     const Rect ar = sensor_menu_arrow_rect();
     const uint16_t fwd_bg = (selected == eSensorFwd) ? sel_bg : bar_bg;
     return draw_advance_arrow_slot(d, ar, fwd_bg, arrow_fg);
+}
+
+/**
+ * @brief MAG live bar: Mode, Axis, Unit, Back (four equal slots).
+ */
+static inline esp_err_t draw_mag_live_menu_bar(Display& d, uint8_t selected,
+                                              uint8_t view_mode, uint8_t axis_mode,
+                                              uint8_t unit_mode,
+                                              uint16_t bar_bg, uint16_t sel_bg,
+                                              uint16_t text_fg, uint16_t /*arrow_fg*/)
+{
+    esp_err_t err = d.fillRect(kBarRect.x0, kBarRect.y0, kBarRect.x1, kBarRect.y1, bar_bg);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    for (uint8_t i = 0U; i < kMagLiveMenuCount; i++) {
+        const Rect r = mag_live_menu_slot_rect(i);
+        if (i == selected) {
+            err = d.fillRect(r.x0, r.y0, r.x1, r.y1, sel_bg);
+            if (err != ESP_OK) {
+                return err;
+            }
+        }
+
+        if (i == eMagLiveBack) {
+            const uint16_t cx = static_cast<uint16_t>((r.x0 + r.x1) / 2U);
+            const uint16_t cy = static_cast<uint16_t>((r.y0 + r.y1) / 2U);
+            err = draw_back_glyph(d, cx, cy, 10U, text_fg);
+        } else {
+            const char* label = "";
+            if (i == eMagLiveMode) {
+                label = mag_view_label(view_mode);
+            } else if (i == eMagLiveAxis) {
+                label = mag_axis_label(axis_mode, view_mode);
+            } else {
+                label = mag_unit_label(unit_mode);
+            }
+            const uint16_t tx = static_cast<uint16_t>(r.x0 + 2U);
+            const uint16_t ty = static_cast<uint16_t>(kBarY + 14U);
+            err = d.drawString(tx, ty, label, text_fg);
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
 }
 
 /**
