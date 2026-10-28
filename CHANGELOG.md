@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) fo
 
 ### Added
 
+- `ble_api` — generic NimBLE GATT peripheral (`BlePeripheral`) and central (`BleCentral`); config-driven name and 128-bit UUIDs; one role active at a time
+- `examples/ble_peripheral_example.cpp` / `examples/ble_central_example.cpp` — laptop/phone connect demos
 - `uart_api` — UART ports 0–2 with config pins, baud, and RX/TX buffers; IDF types confined to the `.cpp`
 - `sensors/l76k_api` + `l76k_regs` — L76K / L76X GNSS over UART: PMTK command framing, `$GNRMC` / `$GPRMC` parse, optional PPS GPIO
 - `examples/l76k_example.cpp` — UART1 GNSS RMC demo (pins local to the example)
@@ -18,8 +20,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) fo
 
 ### Changed
 
-- Root `library.json` `srcFilter` now includes `uart_api.cpp`, `sensors/l76k_api.cpp`, and `sensors/bmi160_api.cpp`
-- `AGENTS.md` package table lists UART, SD, L76K, and BMI160 with the other core drivers
+- Root `library.json` `srcFilter` now includes `uart_api.cpp`, `ble_api.cpp`, `sensors/l76k_api.cpp`, and `sensors/bmi160_api.cpp`
+- `AGENTS.md` package table lists UART, SD, BLE, L76K, and BMI160 with the other core drivers
 
 ### Notes
 

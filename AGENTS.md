@@ -20,7 +20,7 @@ Reusable ESP32-S3 (ESP-IDF) peripheral driver libraries — not application firm
 |-------|----------|------|
 | Public API | `include/<name>_api.hpp` | Types, config, class / handlers; no ESP-IDF driver headers |
 | Implementation | `src/<name>_api.cpp` | ESP-IDF / FreeRTOS calls, mapping helpers, logging |
-| PlatformIO core lib | root `library.json` (`ESP32-S3_Libraries`) | **gpio_api + spi_api + i2c_api + uart_api + sd_api**; sensors under `include/sensors/` (`hmc5883l`, `hmc5983`, `amg8833`, `bmi160`, `l76k`) — no ST7789 dependency |
+| PlatformIO core lib | root `library.json` (`ESP32-S3_Libraries`) | **gpio_api + spi_api + i2c_api + uart_api + sd_api + ble_api**; sensors under `include/sensors/` (`hmc5883l`, `hmc5983`, `amg8833`, `bmi160`, `l76k`) — no ST7789 dependency |
 | PlatformIO display lib | `display/library.json` (`esp32_s3_display`) | `display_api` / layout / ST7789 interface; depends on `ESP32-S3_Libraries` + app-provided `st7789` |
 | Examples | `examples/` and `src/*_example.cpp` | App-side demos; product apps (e.g. proto_esp32_s3) consume via `lib_deps` |
 

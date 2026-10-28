@@ -19,7 +19,7 @@ Board pins, baud rates, and peripheral instances stay in the **application** con
 
 | Package | Path | Contents |
 |---------|------|----------|
-| `ESP32-S3_Libraries` | root [`library.json`](library.json) | `gpio_api`, `spi_api`, `i2c_api`, `uart_api`, `sd_api`, sensors |
+| `ESP32-S3_Libraries` | root [`library.json`](library.json) | `gpio_api`, `spi_api`, `i2c_api`, `uart_api`, `sd_api`, `ble_api`, sensors |
 | `esp32_s3_display` | [`display/library.json`](display/library.json) | `display_api`, layout helpers, ST7789 interface glue |
 | `st7789` | app-vendored (e.g. `lib/st7789`) | LibDriver ST7789 — **not** in the root package |
 
@@ -32,8 +32,11 @@ Board pins, baud rates, and peripheral instances stay in the **application** con
 | I2C | [`include/i2c_api.hpp`](include/i2c_api.hpp) | I2C master ports 0/1 |
 | UART | [`include/uart_api.hpp`](include/uart_api.hpp) | UART ports 0–2 |
 | SD | [`include/sd_api.hpp`](include/sd_api.hpp) | SDSPI + FatFS mount |
+| BLE | [`include/ble_api.hpp`](include/ble_api.hpp) | NimBLE GATT peripheral (`BlePeripheral`) and central (`BleCentral`); config name/UUIDs |
 
 Public headers do **not** include `driver/*.h`. ESP-IDF types stay in the `.cpp` files.
+
+**BLE note:** enable `CONFIG_BT_ENABLED` and `CONFIG_BT_NIMBLE_ENABLED` in the app `sdkconfig`. Only one role may be active after `init()`.
 
 ## Sensor modules
 
@@ -104,6 +107,8 @@ Demo sources under [`examples/`](examples/) keep pin numbers in the example only
 | `amg8833_example.cpp` | IR Grid-EYE |
 | `bmi160_example.cpp` | IMU accel / gyro |
 | `l76k_example.cpp` | GNSS RMC |
+| `ble_peripheral_example.cpp` | BLE GATT server |
+| `ble_central_example.cpp` | BLE GATT client |
 | `sd_example.cpp` | SD card |
 | `display_driver_smoke.cpp` / `display_menu_example.cpp` | ST7789 UI |
 
