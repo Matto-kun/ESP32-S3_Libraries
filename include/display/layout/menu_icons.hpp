@@ -17,6 +17,7 @@
 #include "display/layout/menu_bar.hpp"
 #include "display/layout/sensor_menu.hpp"
 #include "display/layout/mag_live_menu.hpp"
+#include "display/layout/ir_live_menu.hpp"
 
 namespace display_layout {
 
@@ -329,6 +330,55 @@ static inline esp_err_t draw_mag_live_menu_bar(Display& d, uint8_t selected,
                 label = mag_axis_label(axis_mode, view_mode);
             } else {
                 label = mag_unit_label(unit_mode);
+            }
+            const uint16_t tx = static_cast<uint16_t>(r.x0 + 2U);
+            const uint16_t ty = static_cast<uint16_t>(kBarY + 14U);
+            err = d.drawString(tx, ty, label, text_fg);
+        }
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
+/**
+ * @brief IR live bar: Filter, Level, Rot, Flip, Back (five equal slots).
+ */
+static inline esp_err_t draw_ir_live_menu_bar(Display& d, uint8_t selected,
+                                             uint8_t filter_mode, uint8_t sharp_level,
+                                             uint8_t rot_mode, bool flip_on,
+                                             uint16_t bar_bg, uint16_t sel_bg,
+                                             uint16_t text_fg, uint16_t /*arrow_fg*/)
+{
+    esp_err_t err = d.fillRect(kBarRect.x0, kBarRect.y0, kBarRect.x1, kBarRect.y1, bar_bg);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    for (uint8_t i = 0U; i < kIrLiveMenuCount; i++) {
+        const Rect r = ir_live_menu_slot_rect(i);
+        if (i == selected) {
+            err = d.fillRect(r.x0, r.y0, r.x1, r.y1, sel_bg);
+            if (err != ESP_OK) {
+                return err;
+            }
+        }
+
+        if (i == eIrLiveBack) {
+            const uint16_t cx = static_cast<uint16_t>((r.x0 + r.x1) / 2U);
+            const uint16_t cy = static_cast<uint16_t>((r.y0 + r.y1) / 2U);
+            err = draw_back_glyph(d, cx, cy, 10U, text_fg);
+        } else {
+            const char* label = "";
+            if (i == eIrLiveFilter) {
+                label = ir_filter_label(filter_mode);
+            } else if (i == eIrLiveLevel) {
+                label = ir_level_label(sharp_level);
+            } else if (i == eIrLiveRot) {
+                label = ir_rot_label(rot_mode);
+            } else if (i == eIrLiveFlip) {
+                label = ir_flip_label(flip_on);
             }
             const uint16_t tx = static_cast<uint16_t>(r.x0 + 2U);
             const uint16_t ty = static_cast<uint16_t>(kBarY + 14U);

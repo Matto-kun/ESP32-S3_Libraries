@@ -10,4 +10,6 @@ idf_component_register(
         driver
         freertos
         log
+        fatfs
+        sdmmc
 )
