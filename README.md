@@ -42,6 +42,7 @@ Public headers do **not** include `driver/*.h`. ESP-IDF types stay in the `.cpp`
 | HMC5883L | `include/sensors/hmc5883l_*.hpp` | I2C |
 | HMC5983 | `include/sensors/hmc5983_*.hpp` | I2C |
 | AMG8833 | `include/sensors/amg8833_*.hpp` | I2C |
+| BMI160 | `include/sensors/bmi160_*.hpp` | I2C (accel + gyro; CHIP_ID `0xD1`) |
 | L76K GNSS | `include/sensors/l76k_*.hpp` | UART (NMEA RMC + PMTK helpers) |
 
 Register maps live in `*_regs.hpp`. Drivers live in `*_api.hpp` / `src/sensors/*_api.cpp`.
@@ -101,6 +102,7 @@ Demo sources under [`examples/`](examples/) keep pin numbers in the example only
 | `gpio_example.cpp` / `gpio_simple_example.cpp` | GPIO |
 | `hmc5883l_example.cpp` | Magnetometer |
 | `amg8833_example.cpp` | IR Grid-EYE |
+| `bmi160_example.cpp` | IMU accel / gyro |
 | `l76k_example.cpp` | GNSS RMC |
 | `sd_example.cpp` | SD card |
 | `display_driver_smoke.cpp` / `display_menu_example.cpp` | ST7789 UI |

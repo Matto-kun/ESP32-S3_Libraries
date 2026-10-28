@@ -2,7 +2,7 @@
   "name": "ESP32-S3_Libraries",
   "version": "1.0.0",
   "description": "ESP32-S3 peripheral drivers (GPIO, SPI, I2C, UART, SD) and sensor APIs",
-  "keywords": "esp32, esp32-s3, gpio, spi, i2c, uart, sd, sdspi, hmc5883l, hmc5983, amg8833, l76k, gnss, espidf",
+  "keywords": "esp32, esp32-s3, gpio, spi, i2c, uart, sd, sdspi, hmc5883l, hmc5983, amg8833, bmi160, l76k, gnss, imu, espidf",
   "authors": {
     "name": "Mat RB"
   },
@@ -21,6 +21,7 @@
       "+<sensors/hmc5883l_api.cpp>",
       "+<sensors/hmc5983_api.cpp>",
       "+<sensors/amg8833_api.cpp>",
+      "+<sensors/bmi160_api.cpp>",
       "+<sensors/l76k_api.cpp>",
       "+<sd_api.cpp>"
     ]
