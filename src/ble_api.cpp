@@ -12,7 +12,9 @@
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/timers.h"
 
+#include "esp_bt.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -66,6 +68,16 @@ static bool     s_peri_status_sub = false;
 static uint16_t s_peri_rx_handle  = 0;
 static uint16_t s_peri_tx_handle  = 0;
 static uint16_t s_peri_st_handle  = 0;
+
+/** Deferred ADV restart after disconnect (GAP teardown must finish first). */
+static constexpr TickType_t kPeriAdvRestartDelayTicks =
+    pdMS_TO_TICKS(300);
+static constexpr TickType_t kPeriAdvRetryDelayTicks =
+    pdMS_TO_TICKS(500);
+static constexpr int kPeriAdvMaxRetries = 3;
+static TimerHandle_t s_peri_adv_timer = nullptr;
+static bool          s_peri_adv_retry_armed = false;
+static int           s_peri_adv_retry_count = 0;
 
 static struct ble_gatt_svc_def s_gatt_svcs[2];
 static struct ble_gatt_chr_def s_gatt_chrs[4];
@@ -208,11 +220,17 @@ static int periAccess(uint16_t /*conn_handle*/, uint16_t attr_handle,
 {
     switch (ctxt->op) {
     case BLE_GATT_ACCESS_OP_READ_CHR:
+        /* TX/status are notify-first; empty read is valid. */
+        return 0;
+
+    case BLE_GATT_ACCESS_OP_READ_DSC:
+    case BLE_GATT_ACCESS_OP_WRITE_DSC:
+        /* Let NimBLE own CCCD; do not return UNLIKELY (0x0e). */
         return 0;
 
     case BLE_GATT_ACCESS_OP_WRITE_CHR: {
         if (attr_handle != s_peri_rx_handle) {
-            return BLE_ATT_ERR_UNLIKELY;
+            return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
         }
         uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
         if (om_len == 0U || om_len > kBleCbBufBytes) {
@@ -234,7 +252,7 @@ static int periAccess(uint16_t /*conn_handle*/, uint16_t attr_handle,
     }
 
     default:
-        return BLE_ATT_ERR_UNLIKELY;
+        return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
     }
 }
 
@@ -274,6 +292,16 @@ static esp_err_t periRegisterGatt(void)
     return ESP_OK;
 }
 
+static void periSetAdvTxPowerMax(void)
+{
+    /* Best-effort: stronger ADV helps OEM phones with weak scanners. */
+    const esp_err_t err =
+        esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "adv tx power set: %s", esp_err_to_name(err));
+    }
+}
+
 static esp_err_t periAdvertiseNow(const ble_cfg_t& cfg)
 {
     if (!s_host_ready) {
@@ -283,43 +311,168 @@ static esp_err_t periAdvertiseNow(const ble_cfg_t& cfg)
     const char* name =
         (cfg.device_name != nullptr) ? cfg.device_name : kBleDefaultDeviceName;
 
+    /*
+     * Put name + UUID in the primary ADV only. Do not register SCAN_RSP fields.
+     * An empty/zeroed SCAN_RSP still marks the ADV as scannable; Android can
+     * discard the whole report when SCAN_RSP is lost (Espressif AR2024-001).
+     */
     struct ble_hs_adv_fields fields;
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.name = reinterpret_cast<const uint8_t*>(name);
     fields.name_len = static_cast<uint8_t>(strlen(name));
     fields.name_is_complete = 1;
+    fields.uuids128 = &s_svc_uuid;
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
 
     int rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
-        ESP_LOGE(TAG, "adv_set_fields rc=%d", rc);
-        return ESP_FAIL;
+        /* 31-byte ADV budget: name in primary only — never put identity in SCAN_RSP. */
+        ESP_LOGW(TAG, "combined ADV fields rc=%d — name-only primary ADV", rc);
+        memset(&fields, 0, sizeof(fields));
+        fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+        fields.name = reinterpret_cast<const uint8_t*>(name);
+        fields.name_len = static_cast<uint8_t>(strlen(name));
+        fields.name_is_complete = 1;
+        rc = ble_gap_adv_set_fields(&fields);
+        if (rc != 0) {
+            ESP_LOGE(TAG, "adv_set_fields rc=%d", rc);
+            return ESP_FAIL;
+        }
+        ESP_LOGW(TAG, "service UUID not in ADV (name-only fallback)");
+    } else {
+        ESP_LOGI(TAG, "primary ADV has name+UUID (no SCAN_RSP)");
     }
 
-    /* Put 128-bit service UUID in scan response (ADV often too small). */
-    struct ble_hs_adv_fields rsp;
-    memset(&rsp, 0, sizeof(rsp));
-    rsp.uuids128 = &s_svc_uuid;
-    rsp.num_uuids128 = 1;
-    rsp.uuids128_is_complete = 1;
-    rc = ble_gap_adv_rsp_set_fields(&rsp);
-    if (rc != 0) {
-        ESP_LOGW(TAG, "adv_rsp_set_fields rc=%d", rc);
-    }
+    periSetAdvTxPowerMax();
 
     struct ble_gap_adv_params adv_params;
     memset(&adv_params, 0, sizeof(adv_params));
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    /* 20–30 ms: denser ADV so OEM scanners are more likely to catch ProtoMag. */
+    adv_params.itvl_min = 32;
+    adv_params.itvl_max = 48;
 
     rc = ble_gap_adv_start(s_own_addr_type, nullptr, BLE_HS_FOREVER,
                            &adv_params, periGapEvent, nullptr);
+    if (rc == BLE_HS_EALREADY && ble_gap_adv_active()) {
+        ESP_LOGW(TAG, "adv_start EALREADY — already advertising");
+        return ESP_OK;
+    }
     if (rc != 0) {
         ESP_LOGE(TAG, "adv_start rc=%d", rc);
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "advertising as \"%s\"", name);
     return ESP_OK;
+}
+
+static esp_err_t periRestartAdvertising(const ble_cfg_t& cfg)
+{
+    if (s_peri_conn != BLE_HS_CONN_HANDLE_NONE) {
+        ESP_LOGW(TAG, "restart ADV skipped — still connected");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_host_ready) {
+        ESP_LOGE(TAG, "restart ADV — host not ready");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (ble_gap_adv_active()) {
+        const int stop_rc = ble_gap_adv_stop();
+        if (stop_rc != 0) {
+            ESP_LOGW(TAG, "adv_stop before restart rc=%d", stop_rc);
+        }
+    }
+
+    const esp_err_t err = periAdvertiseNow(cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "restart ADV failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+static void periAdvTimerCb(TimerHandle_t /*timer*/)
+{
+    if (s_peri == nullptr || !s_peri->getConfig().auto_advertise) {
+        s_peri_adv_retry_armed = false;
+        s_peri_adv_retry_count = 0;
+        return;
+    }
+    if (s_peri_conn != BLE_HS_CONN_HANDLE_NONE) {
+        s_peri_adv_retry_armed = false;
+        s_peri_adv_retry_count = 0;
+        return;
+    }
+
+    const esp_err_t err = periRestartAdvertising(s_peri->getConfig());
+    if (err == ESP_OK) {
+        s_peri_adv_retry_armed = false;
+        s_peri_adv_retry_count = 0;
+        return;
+    }
+
+    if (s_peri_adv_retry_count < kPeriAdvMaxRetries &&
+        s_peri_adv_timer != nullptr) {
+        s_peri_adv_retry_count++;
+        s_peri_adv_retry_armed = true;
+        ESP_LOGW(TAG, "ADV restart retry %d/%d in %u ms",
+                 s_peri_adv_retry_count, kPeriAdvMaxRetries,
+                 (unsigned)(kPeriAdvRetryDelayTicks * portTICK_PERIOD_MS));
+        (void)xTimerChangePeriod(s_peri_adv_timer, kPeriAdvRetryDelayTicks, 0);
+        (void)xTimerStart(s_peri_adv_timer, 0);
+        return;
+    }
+    s_peri_adv_retry_armed = false;
+    s_peri_adv_retry_count = 0;
+    ESP_LOGE(TAG, "ADV restart gave up after retries");
+}
+
+static void periScheduleAdvertiseRestart(void)
+{
+    if (s_peri == nullptr || !s_peri->getConfig().auto_advertise) {
+        return;
+    }
+    if (s_peri_adv_timer == nullptr) {
+        ESP_LOGE(TAG, "ADV restart timer missing");
+        return;
+    }
+    s_peri_adv_retry_armed = false;
+    s_peri_adv_retry_count = 0;
+    (void)xTimerChangePeriod(s_peri_adv_timer, kPeriAdvRestartDelayTicks, 0);
+    if (xTimerStart(s_peri_adv_timer, 0) != pdPASS) {
+        ESP_LOGE(TAG, "ADV restart timer start failed");
+    } else {
+        ESP_LOGI(TAG, "ADV restart scheduled in %u ms",
+                 (unsigned)(kPeriAdvRestartDelayTicks * portTICK_PERIOD_MS));
+    }
+}
+
+static esp_err_t periCreateAdvTimer(void)
+{
+    if (s_peri_adv_timer != nullptr) {
+        return ESP_OK;
+    }
+    s_peri_adv_timer = xTimerCreate(
+        "peri_adv", kPeriAdvRestartDelayTicks, pdFALSE, nullptr, periAdvTimerCb);
+    if (s_peri_adv_timer == nullptr) {
+        ESP_LOGE(TAG, "xTimerCreate peri_adv failed");
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+
+static void periDeleteAdvTimer(void)
+{
+    if (s_peri_adv_timer == nullptr) {
+        return;
+    }
+    (void)xTimerStop(s_peri_adv_timer, 0);
+    (void)xTimerDelete(s_peri_adv_timer, 0);
+    s_peri_adv_timer = nullptr;
+    s_peri_adv_retry_armed = false;
 }
 
 static int periGapEvent(struct ble_gap_event* event, void* /*arg*/)
@@ -338,9 +491,7 @@ static int periGapEvent(struct ble_gap_event* event, void* /*arg*/)
             }
         } else {
             ESP_LOGW(TAG, "peri connect fail status=%d", event->connect.status);
-            if (s_peri != nullptr && s_peri->getConfig().auto_advertise) {
-                (void)periAdvertiseNow(s_peri->getConfig());
-            }
+            periScheduleAdvertiseRestart();
         }
         return 0;
 
@@ -355,28 +506,46 @@ static int periGapEvent(struct ble_gap_event* event, void* /*arg*/)
         if (cb != nullptr) {
             cb(false, event->disconnect.conn.conn_handle);
         }
-        if (s_peri != nullptr && s_peri->getConfig().auto_advertise) {
-            (void)periAdvertiseNow(s_peri->getConfig());
+        periScheduleAdvertiseRestart();
+        return 0;
+    }
+
+    case BLE_GAP_EVENT_SUBSCRIBE: {
+        /* Never log inside the critical section — printf locks abort. */
+        bool tx_changed = false;
+        bool st_changed = false;
+        bool tx_sub = false;
+        bool st_sub = false;
+        portENTER_CRITICAL(&s_ble_mux);
+        if (event->subscribe.attr_handle == s_peri_tx_handle) {
+            s_peri_tx_sub = event->subscribe.cur_notify != 0;
+            tx_sub = s_peri_tx_sub;
+            tx_changed = true;
+        } else if (event->subscribe.attr_handle == s_peri_st_handle) {
+            s_peri_status_sub = event->subscribe.cur_notify != 0;
+            st_sub = s_peri_status_sub;
+            st_changed = true;
+        }
+        portEXIT_CRITICAL(&s_ble_mux);
+        if (tx_changed) {
+            ESP_LOGI(TAG, "TX CCCD notify=%d", (int)tx_sub);
+        }
+        if (st_changed) {
+            ESP_LOGI(TAG, "status CCCD notify=%d", (int)st_sub);
         }
         return 0;
     }
 
-    case BLE_GAP_EVENT_SUBSCRIBE:
-        portENTER_CRITICAL(&s_ble_mux);
-        if (event->subscribe.attr_handle == s_peri_tx_handle) {
-            s_peri_tx_sub = event->subscribe.cur_notify != 0;
-            ESP_LOGI(TAG, "TX CCCD notify=%d", (int)s_peri_tx_sub);
-        } else if (event->subscribe.attr_handle == s_peri_st_handle) {
-            s_peri_status_sub = event->subscribe.cur_notify != 0;
-            ESP_LOGI(TAG, "status CCCD notify=%d", (int)s_peri_status_sub);
-        }
-        portEXIT_CRITICAL(&s_ble_mux);
+    case BLE_GAP_EVENT_MTU:
+        ESP_LOGI(TAG, "ATT MTU updated conn=%u mtu=%u",
+                 (unsigned)event->mtu.conn_handle,
+                 (unsigned)event->mtu.value);
         return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
         if (s_peri != nullptr && s_peri->getConfig().auto_advertise &&
             s_peri_conn == BLE_HS_CONN_HANDLE_NONE) {
-            (void)periAdvertiseNow(s_peri->getConfig());
+            periScheduleAdvertiseRestart();
         }
         return 0;
 
@@ -767,9 +936,23 @@ esp_err_t BlePeripheral::init()
         return ESP_ERR_TIMEOUT;
     }
 
+    err = periCreateAdvTimer();
+    if (err != ESP_OK) {
+        (void)nimble_port_stop();
+        nimble_port_deinit();
+        s_host_role = eBleHostIdle;
+        s_peri = nullptr;
+        return err;
+    }
+
     m_inited = true;
     if (m_config.auto_advertise) {
-        (void)startAdvertising();
+        err = startAdvertising();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "start advertising: %s", esp_err_to_name(err));
+            (void)deinit();
+            return err;
+        }
     }
     return ESP_OK;
 }
@@ -779,6 +962,7 @@ esp_err_t BlePeripheral::deinit()
     if (!m_inited) {
         return ESP_OK;
     }
+    periDeleteAdvTimer();
     (void)stopAdvertising();
     if (s_peri_conn != BLE_HS_CONN_HANDLE_NONE) {
         (void)ble_gap_terminate(s_peri_conn, BLE_ERR_REM_USER_CONN_TERM);
@@ -796,13 +980,7 @@ esp_err_t BlePeripheral::startAdvertising()
     if (!m_inited) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (s_peri_conn != BLE_HS_CONN_HANDLE_NONE) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (ble_gap_adv_active()) {
-        return ESP_OK;
-    }
-    return periAdvertiseNow(m_config);
+    return periRestartAdvertising(m_config);
 }
 
 esp_err_t BlePeripheral::stopAdvertising()
@@ -876,6 +1054,28 @@ bool BlePeripheral::isConnected() const
     const bool connected = (s_peri_conn != BLE_HS_CONN_HANDLE_NONE);
     portEXIT_CRITICAL(&s_ble_mux);
     return connected;
+}
+
+bool BlePeripheral::isTxSubscribed() const
+{
+    if (!m_inited) {
+        return false;
+    }
+    portENTER_CRITICAL(&s_ble_mux);
+    const bool sub = s_peri_tx_sub;
+    portEXIT_CRITICAL(&s_ble_mux);
+    return sub;
+}
+
+bool BlePeripheral::isStatusSubscribed() const
+{
+    if (!m_inited) {
+        return false;
+    }
+    portENTER_CRITICAL(&s_ble_mux);
+    const bool sub = s_peri_status_sub;
+    portEXIT_CRITICAL(&s_ble_mux);
+    return sub;
 }
 
 bool BlePeripheral::isInited() const

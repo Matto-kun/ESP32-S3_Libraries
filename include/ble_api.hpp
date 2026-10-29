@@ -127,6 +127,8 @@ public:
     void setRxCallback(ble_data_cb_t cb);
 
     bool              isConnected() const;
+    bool              isTxSubscribed() const;
+    bool              isStatusSubscribed() const;
     bool              isInited() const;
     const ble_cfg_t&  getConfig() const;
 
