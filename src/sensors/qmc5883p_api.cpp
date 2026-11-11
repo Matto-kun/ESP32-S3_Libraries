@@ -11,17 +11,16 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char* TAG = "QMC5883P";
+static constexpr int64_t kUsPerMs = 1000LL;
+/** I2C transaction budget. This is not the DRDY wait. */
+static constexpr uint32_t kRegIoTimeoutMs = 50U;
 
-static bool modeChangeNeedsSuspend(qmc5883p_regs::Mode from, qmc5883p_regs::Mode to)
-{
-    return qmc5883p_regs::isMeasureMode(from) &&
-           qmc5883p_regs::isMeasureMode(to) &&
-           (from != to);
-}
 
 Qmc5883p::Qmc5883p(I2C& bus, const qmc5883p_cfg_t& cfg)
     : m_bus(bus)
@@ -43,17 +42,17 @@ Qmc5883p::~Qmc5883p()
 esp_err_t Qmc5883p::writeReg(uint8_t reg, uint8_t val)
 {
     const uint8_t buf[2] = {reg, val};
-    return m_bus.write(m_cfg.addr7, buf, sizeof(buf), m_cfg.poll_timeout_ms);
+    return m_bus.write(m_cfg.addr7, buf, sizeof(buf), kRegIoTimeoutMs);
 }
 
 esp_err_t Qmc5883p::readReg(uint8_t reg, uint8_t& val)
 {
-    return m_bus.writeRead(m_cfg.addr7, &reg, 1U, &val, 1U, m_cfg.poll_timeout_ms);
+    return m_bus.writeRead(m_cfg.addr7, &reg, 1U, &val, 1U, kRegIoTimeoutMs);
 }
 
 esp_err_t Qmc5883p::readRegs(uint8_t reg, uint8_t* buf, size_t len)
 {
-    return m_bus.writeRead(m_cfg.addr7, &reg, 1U, buf, len, m_cfg.poll_timeout_ms);
+    return m_bus.writeRead(m_cfg.addr7, &reg, 1U, buf, len, kRegIoTimeoutMs);
 }
 
 esp_err_t Qmc5883p::verifyId()
@@ -88,14 +87,14 @@ esp_err_t Qmc5883p::applyConfig()
         return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_RETURN_ON_ERROR(
-        writeReg(qmc5883p_regs::kRegAxisSign, qmc5883p_regs::kAxisSignXyz),
-        TAG, "write axis sign");
-
-    if (modeChangeNeedsSuspend(m_hw_mode, m_cfg.mode)) {
+    // Suspend first. A measure mode blocks the setup register writes.
+    if (qmc5883p_regs::isMeasureMode(m_hw_mode)) {
         ESP_RETURN_ON_ERROR(enterSuspend(), TAG, "mode bridge");
     }
 
+    ESP_RETURN_ON_ERROR(
+        writeReg(qmc5883p_regs::kRegAxisSign, qmc5883p_regs::kAxisSignXyz),
+        TAG, "write axis sign");
     ESP_RETURN_ON_ERROR(writeReg(qmc5883p_regs::kRegCtrl2, ctrl2), TAG, "write CTRL2");
     ESP_RETURN_ON_ERROR(writeReg(qmc5883p_regs::kRegCtrl1, ctrl1), TAG, "write CTRL1");
     m_hw_mode = m_cfg.mode;
@@ -131,11 +130,19 @@ esp_err_t Qmc5883p::reconfigure(const qmc5883p_cfg_t& cfg)
         return ESP_ERR_INVALID_STATE;
     }
 
-    m_cfg = cfg;
     if (!m_inited) {
+        m_cfg = cfg;
         return ESP_OK;
     }
-    return applyConfig();
+    const qmc5883p_cfg_t saved = m_cfg;
+    m_cfg = cfg;
+    const esp_err_t err = applyConfig();
+    if (err != ESP_OK) {
+        m_cfg = saved;
+        ESP_LOGE(TAG, "reconfigure failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    return ESP_OK;
 }
 
 esp_err_t Qmc5883p::deinit()
@@ -155,17 +162,30 @@ esp_err_t Qmc5883p::deinit()
     return err;
 }
 
+static void feedTaskWdt(void)
+{
+    const esp_err_t state = esp_task_wdt_status(nullptr);
+    if (state != ESP_OK) {
+        return;
+    }
+    const esp_err_t err = esp_task_wdt_reset();
+    if (err == ESP_OK || err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_STATE) {
+        return;
+    }
+}
+
 esp_err_t Qmc5883p::waitReady(uint8_t& status)
 {
-    const TickType_t start = xTaskGetTickCount();
-    const TickType_t limit = pdMS_TO_TICKS(m_cfg.poll_timeout_ms);
+    // One tick is 10 ms. That delay drops samples at 200 Hz and at 1500 Hz.
+    const int64_t start_us = esp_timer_get_time();
+    const int64_t budget_us = static_cast<int64_t>(m_cfg.poll_timeout_ms) * kUsPerMs;
 
-    while ((xTaskGetTickCount() - start) < limit) {
+    while ((esp_timer_get_time() - start_us) < budget_us) {
+        feedTaskWdt();
         ESP_RETURN_ON_ERROR(readReg(qmc5883p_regs::kRegStatus, status), TAG, "read status");
         if ((status & qmc5883p_regs::kStatusDrdy) != 0U) {
             return ESP_OK;
         }
-        vTaskDelay(1);
     }
 
     ESP_LOGE(TAG, "DRDY timeout (%lu ms)", static_cast<unsigned long>(m_cfg.poll_timeout_ms));

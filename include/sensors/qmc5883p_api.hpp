@@ -86,6 +86,7 @@ public:
      * @param[out] out Raw counts. The driver fills this before an overflow return.
      * @return ESP_OK, ESP_ERR_INVALID_STATE, ESP_ERR_TIMEOUT, ESP_ERR_INVALID_RESPONSE on overflow, or an I2C error.
      * @note The call blocks until the data-ready bit is set or poll_timeout_ms ends.
+     *       The wait polls the status register. It does not sleep for a tick.
      *       Set poll_timeout_ms above one output period.
      */
     esp_err_t readRaw(qmc5883p_raw_t& out);

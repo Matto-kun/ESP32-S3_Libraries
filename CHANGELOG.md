@@ -23,6 +23,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) fo
 
 ### Changed
 
+- `Qmc5883p::readRaw` polls DRDY on a microsecond budget. Register I2C transfers use a fixed timeout, not that budget. `reconfigure` suspends before the new control bytes.
 - Root `library.json` `srcFilter` now includes `uart_api.cpp`, `ble_api.cpp`, `sensors/l76k_api.cpp`, and `sensors/bmi160_api.cpp`
 - `AGENTS.md` package table lists UART, SD, BLE, L76K, and BMI160 with the other core drivers
 
