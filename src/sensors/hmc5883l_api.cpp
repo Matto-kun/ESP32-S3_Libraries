@@ -101,6 +101,25 @@ esp_err_t Hmc5883l::init()
     return ESP_OK;
 }
 
+esp_err_t Hmc5883l::reconfigure(const hmc5883l_cfg_t& cfg)
+{
+    if (!m_bus.isInited()) {
+        ESP_LOGE(TAG, "I2C bus not inited");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    m_cfg = cfg;
+    if (!m_inited) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(applyConfig(), TAG, "reconfigure");
+    if (m_cfg.mode == hmc5883l_regs::eHmcModeContinuous) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return ESP_OK;
+}
+
 esp_err_t Hmc5883l::deinit()
 {
     if (!m_inited) {

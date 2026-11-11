@@ -83,9 +83,10 @@ esp_err_t I2C::init()
         m_bus = bus;
         m_bus_owned = true;
         s_bus_refcount[idx]++;
-        ESP_LOGI(TAG, "Bus port %d SDA=%d SCL=%d @ %lu Hz",
+        ESP_LOGI(TAG, "Bus port %d SDA=%d SCL=%d @ %lu Hz pullup=%d",
                  (int)m_config.port, (int)m_config.sda_pin, (int)m_config.scl_pin,
-                 (unsigned long)m_config.clk_hz);
+                 (unsigned long)m_config.clk_hz,
+                 m_config.enable_internal_pullup ? 1 : 0);
     } else {
         ESP_LOGE(TAG, "Port %d bus already owned by another instance (not supported yet)",
                  (int)m_config.port);
@@ -239,6 +240,18 @@ esp_err_t I2C::writeRead(uint8_t addr7,
     return i2c_master_transmit_receive(static_cast<i2c_master_dev_handle_t>(dev),
                                        wr, wr_len, rd, rd_len,
                                        static_cast<int>(timeout_ms));
+}
+
+esp_err_t I2C::probe(uint8_t addr7, uint32_t timeout_ms)
+{
+    if (!m_inited || (m_bus == nullptr)) {
+        ESP_LOGE(TAG, "Not inited");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return i2c_master_probe(static_cast<i2c_master_bus_handle_t>(m_bus),
+                            addr7,
+                            static_cast<int>(timeout_ms));
 }
 
 const i2c_cfg_t& I2C::getConfig() const

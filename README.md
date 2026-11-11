@@ -43,6 +43,7 @@ Public headers do **not** include `driver/*.h`. ESP-IDF types stay in the `.cpp`
 | Module | Headers | Bus |
 |--------|---------|-----|
 | HMC5883L | `include/sensors/hmc5883l_*.hpp` | I2C |
+| QMC5883P | `include/sensors/qmc5883p_*.hpp` | I2C (chip ID `0x80`, address `0x2C`) |
 | HMC5983 | `include/sensors/hmc5983_*.hpp` | I2C |
 | AMG8833 | `include/sensors/amg8833_*.hpp` | I2C |
 | BMI160 | `include/sensors/bmi160_*.hpp` | I2C (accel + gyro; CHIP_ID `0xD1`) |
@@ -103,7 +104,8 @@ Demo sources under [`examples/`](examples/) keep pin numbers in the example only
 | File | Topic |
 |------|--------|
 | `gpio_example.cpp` / `gpio_simple_example.cpp` | GPIO |
-| `hmc5883l_example.cpp` | Magnetometer |
+| `hmc5883l_example.cpp` | HMC5883L magnetometer |
+| `qmc5883p_example.cpp` | QMC5883P magnetometer |
 | `amg8833_example.cpp` | IR Grid-EYE |
 | `bmi160_example.cpp` | IMU accel / gyro |
 | `l76k_example.cpp` | GNSS RMC |

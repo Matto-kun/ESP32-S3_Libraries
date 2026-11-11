@@ -50,6 +50,15 @@ public:
     Hmc5883l(I2C& bus, uint8_t addr7);
 
     esp_err_t init();
+
+    /**
+     * @brief Store a new config and write CRA, CRB, and Mode when init() is done.
+     * @param cfg New config. The address is used for later reads.
+     * @return ESP_OK, or the I2C error from the register writes.
+     * @note Before init(), the config is stored and the chip is not written.
+     */
+    esp_err_t reconfigure(const hmc5883l_cfg_t& cfg);
+
     esp_err_t deinit();
 
     esp_err_t readRaw(hmc5883l_raw_t& out);

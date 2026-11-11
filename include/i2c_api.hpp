@@ -72,6 +72,9 @@ public:
                         uint8_t* rd, size_t rd_len,
                         uint32_t timeout_ms = kI2cDefaultTimeoutMs);
 
+    /// Return ESP_OK when the address ACKs. Return ESP_ERR_NOT_FOUND on NACK.
+    esp_err_t probe(uint8_t addr7, uint32_t timeout_ms = kI2cDefaultTimeoutMs);
+
     const i2c_cfg_t& getConfig() const;
     bool             isInited() const;
 

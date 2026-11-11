@@ -9,6 +9,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) fo
 
 ### Added
 
+- `sensors/qmc5883p_api` + `qmc5883p_regs` — QMC5883P magnetometer (chip ID `0x80`, I2C `0x2C`)
+- `examples/qmc5883p_example.cpp` and env `esp32-s3-qmc5883p-example`
+- `esp32-s3-hmc5883l-example` build. It flashes `examples/hmc5883l_example.cpp` alone.
 - `ble_api` — generic NimBLE GATT peripheral (`BlePeripheral`) and central (`BleCentral`); config-driven name and 128-bit UUIDs; one role active at a time
 - `examples/ble_peripheral_example.cpp` / `examples/ble_central_example.cpp` — laptop/phone connect demos
 - `uart_api` — UART ports 0–2 with config pins, baud, and RX/TX buffers; IDF types confined to the `.cpp`
