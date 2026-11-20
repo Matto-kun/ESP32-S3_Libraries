@@ -1,8 +1,8 @@
 {
   "name": "ESP32-S3_Libraries",
   "version": "1.0.0",
-  "description": "ESP32-S3 peripheral drivers (GPIO, SPI, I2C, UART, SD, BLE) and sensor APIs",
-  "keywords": "esp32, esp32-s3, gpio, spi, i2c, uart, sd, sdspi, ble, nimble, hmc5883l, hmc5983, qmc5883p, amg8833, bmi160, l76k, gnss, imu, espidf",
+  "description": "ESP32-S3 peripheral drivers (GPIO, SPI, I2C, UART, SD, BLE NimBLE/Bluedroid) and sensor APIs",
+  "keywords": "esp32, esp32-s3, gpio, spi, i2c, uart, sd, sdspi, ble, nimble, bluedroid, hmc5883l, hmc5983, qmc5883p, amg8833, bmi160, l76k, gnss, imu, espidf",
   "authors": {
     "name": "Mat RB"
   },
@@ -19,6 +19,7 @@
       "+<i2c_api.cpp>",
       "+<uart_api.cpp>",
       "+<ble_api.cpp>",
+      "+<bluedroid_api.cpp>",
       "+<sensors/hmc5883l_api.cpp>",
       "+<sensors/qmc5883p_api.cpp>",
       "+<sensors/hmc5983_api.cpp>",

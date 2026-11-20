@@ -3,9 +3,14 @@
  * @brief       NimBLE implementation of BlePeripheral and BleCentral
  */
 
+#include "sdkconfig.h"
+
+#if CONFIG_BT_NIMBLE_ENABLED
+
 #include "ble_api.hpp"
 
 #include <string.h>
+#include <inttypes.h>
 
 #include "esp_check.h"
 #include "esp_log.h"
@@ -18,6 +23,8 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
+#include "host/ble_store.h"
+#include "host/ble_sm.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
 #include "services/gap/ble_svc_gap.h"
@@ -54,6 +61,11 @@ static ble_data_cb_t s_peri_rx_cb   = nullptr;
 static ble_conn_cb_t s_cent_conn_cb   = nullptr;
 static ble_data_cb_t s_cent_tx_cb     = nullptr;
 static ble_data_cb_t s_cent_status_cb = nullptr;
+
+static ble_auth_cb_t    s_auth_cb    = nullptr;
+static ble_passkey_cb_t s_passkey_cb = nullptr;
+static bool             s_link_encrypted = false;
+static bool             s_link_bonded    = false;
 
 /* NimBLE UUID objects (type + 16 bytes) */
 static ble_uuid128_t s_svc_uuid = {};
@@ -96,6 +108,182 @@ static uint16_t s_cent_svc_start  = 0;
 static uint16_t s_cent_svc_end    = 0;
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
+
+
+static const ble_sec_cfg_t* activeBleSec(void)
+{
+    if (s_peri != nullptr) {
+        return &s_peri->getConfig().sec;
+    }
+    if (s_cent != nullptr) {
+        return &s_cent->getConfig().sec;
+    }
+    return nullptr;
+}
+
+static uint8_t toNimbleIoCap(eBleIoCap cap)
+{
+    switch (cap) {
+    case eBleIoCap::DisplayOnly:
+        return BLE_HS_IO_DISPLAY_ONLY;
+    case eBleIoCap::DisplayYesNo:
+        return BLE_HS_IO_DISPLAY_YESNO;
+    case eBleIoCap::KeyboardOnly:
+        return BLE_HS_IO_KEYBOARD_ONLY;
+    case eBleIoCap::KeyboardDisplay:
+        return BLE_HS_IO_KEYBOARD_DISPLAY;
+    case eBleIoCap::None:
+    default:
+        return BLE_HS_IO_NO_INPUT_OUTPUT;
+    }
+}
+
+static void applyNimbleSm(const ble_sec_cfg_t& sec)
+{
+    if (!sec.enable) {
+        return;
+    }
+
+    ble_hs_cfg.sm_io_cap = toNimbleIoCap(sec.io_cap);
+
+    switch (sec.auth_mode) {
+    case eBleAuthMode::Bond:
+        ble_hs_cfg.sm_bonding = 1;
+        ble_hs_cfg.sm_mitm = 0;
+        ble_hs_cfg.sm_sc = 0;
+        break;
+    case eBleAuthMode::ScMitmBond:
+        ble_hs_cfg.sm_bonding = 1;
+        ble_hs_cfg.sm_mitm = 1;
+        ble_hs_cfg.sm_sc = 1;
+        break;
+    case eBleAuthMode::None:
+    default:
+        ble_hs_cfg.sm_bonding = 0;
+        ble_hs_cfg.sm_mitm = 0;
+        ble_hs_cfg.sm_sc = 0;
+        break;
+    }
+
+    ble_hs_cfg.sm_our_key_dist =
+        BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist =
+        BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+
+    ESP_LOGI(TAG, "NimBLE SMP enable auth=%d iocap=%d passkey=%06" PRIu32,
+             (int)sec.auth_mode, (int)sec.io_cap, sec.static_passkey);
+}
+
+static esp_err_t bleRequestEncryption(uint16_t conn_handle)
+{
+    const ble_sec_cfg_t* sec = activeBleSec();
+    if (sec == nullptr || !sec->enable) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const int rc = ble_gap_security_initiate(conn_handle);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "security_initiate rc=%d", rc);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+static int bleBondCount(void)
+{
+    int count = 0;
+    const int rc = ble_store_util_count(BLE_STORE_OBJ_TYPE_PEER_SEC, &count);
+    if (rc != 0) {
+        return 0;
+    }
+    return count;
+}
+
+static esp_err_t bleRemoveBond(const ble_bd_addr_t& addr)
+{
+    ble_addr_t peer = {};
+    peer.type = BLE_ADDR_PUBLIC;
+    memcpy(peer.val, addr.bytes, 6);
+    int rc = ble_store_util_delete_peer(&peer);
+    if (rc != 0) {
+        peer.type = BLE_ADDR_RANDOM;
+        rc = ble_store_util_delete_peer(&peer);
+    }
+    return (rc == 0) ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t bleClearBonds(void)
+{
+    const int rc = ble_store_clear();
+    return (rc == 0) ? ESP_OK : ESP_FAIL;
+}
+
+static int handleSecGapCommon(struct ble_gap_event* event)
+{
+    switch (event->type) {
+    case BLE_GAP_EVENT_ENC_CHANGE: {
+        const bool ok = (event->enc_change.status == 0);
+        s_link_encrypted = ok;
+        s_link_bonded = ok;
+        if (ok) {
+            ESP_LOGI(TAG, "connection encrypted");
+        } else {
+            ESP_LOGW(TAG, "encryption failed status=%d", event->enc_change.status);
+        }
+        if (s_auth_cb != nullptr) {
+            s_auth_cb(ok, static_cast<uint8_t>(event->enc_change.status));
+        }
+        return 0;
+    }
+
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+            (void)ble_store_util_delete_peer(&desc.peer_id_addr);
+        }
+        ESP_LOGI(TAG, "repeat pairing — delete old bond and retry");
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
+
+    case BLE_GAP_EVENT_PASSKEY_ACTION: {
+        struct ble_sm_io pkey = {};
+        const ble_sec_cfg_t* sec = activeBleSec();
+        uint32_t passkey = kBleDefaultStaticPasskey;
+        if (sec != nullptr) {
+            passkey = sec->static_passkey;
+            if (passkey > 999999U) {
+                passkey = kBleDefaultStaticPasskey;
+            }
+        }
+        if (event->passkey.params.action == BLE_SM_IOACT_DISP) {
+            pkey.action = event->passkey.params.action;
+            pkey.passkey = passkey;
+            ESP_LOGI(TAG, "passkey display: %06" PRIu32, passkey);
+            if (s_passkey_cb != nullptr) {
+                s_passkey_cb(passkey);
+            }
+            const int rc = ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+            if (rc != 0) {
+                ESP_LOGE(TAG, "ble_sm_inject_io DISP rc=%d", rc);
+            }
+        } else if (event->passkey.params.action == BLE_SM_IOACT_NUMCMP) {
+            pkey.action = event->passkey.params.action;
+            pkey.numcmp_accept = 1;
+            (void)ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+        } else if (event->passkey.params.action == BLE_SM_IOACT_INPUT) {
+            pkey.action = event->passkey.params.action;
+            pkey.passkey = passkey;
+            (void)ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+        }
+        return 0;
+    }
+
+    default:
+        return -1;
+    }
+}
 
 static void loadUuid(ble_uuid128_t* dst, const ble_uuid_bytes_t& src)
 {
@@ -258,20 +446,33 @@ static int periAccess(uint16_t /*conn_handle*/, uint16_t attr_handle,
 
 static esp_err_t periRegisterGatt(void)
 {
+    const ble_sec_cfg_t* sec = activeBleSec();
+    const bool enc_gatt =
+        (sec != nullptr && sec->enable && sec->require_enc_gatt);
+
     memset(s_gatt_chrs, 0, sizeof(s_gatt_chrs));
     s_gatt_chrs[0].uuid       = &s_rx_uuid.u;
     s_gatt_chrs[0].access_cb  = periAccess;
     s_gatt_chrs[0].flags      = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP;
+    if (enc_gatt) {
+        s_gatt_chrs[0].flags |= BLE_GATT_CHR_F_WRITE_ENC | BLE_GATT_CHR_F_WRITE_AUTHEN;
+    }
     s_gatt_chrs[0].val_handle = &s_peri_rx_handle;
 
     s_gatt_chrs[1].uuid       = &s_tx_uuid.u;
     s_gatt_chrs[1].access_cb  = periAccess;
     s_gatt_chrs[1].flags      = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ;
+    if (enc_gatt) {
+        s_gatt_chrs[1].flags |= BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_READ_AUTHEN;
+    }
     s_gatt_chrs[1].val_handle = &s_peri_tx_handle;
 
     s_gatt_chrs[2].uuid       = &s_st_uuid.u;
     s_gatt_chrs[2].access_cb  = periAccess;
     s_gatt_chrs[2].flags      = BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_READ;
+    if (enc_gatt) {
+        s_gatt_chrs[2].flags |= BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_READ_AUTHEN;
+    }
     s_gatt_chrs[2].val_handle = &s_peri_st_handle;
 
     memset(s_gatt_svcs, 0, sizeof(s_gatt_svcs));
@@ -482,10 +683,18 @@ static int periGapEvent(struct ble_gap_event* event, void* /*arg*/)
         if (event->connect.status == 0) {
             portENTER_CRITICAL(&s_ble_mux);
             s_peri_conn = event->connect.conn_handle;
+            s_link_encrypted = false;
+            s_link_bonded = false;
             ble_conn_cb_t cb = s_peri_conn_cb;
             uint16_t handle = s_peri_conn;
             portEXIT_CRITICAL(&s_ble_mux);
             ESP_LOGI(TAG, "peri connected handle=%u", (unsigned)handle);
+            {
+                const ble_sec_cfg_t* sec = activeBleSec();
+                if (sec != nullptr && sec->enable && sec->auto_encrypt_on_connect) {
+                    (void)bleRequestEncryption(handle);
+                }
+            }
             if (cb != nullptr) {
                 cb(true, handle);
             }
@@ -501,6 +710,8 @@ static int periGapEvent(struct ble_gap_event* event, void* /*arg*/)
         s_peri_conn = BLE_HS_CONN_HANDLE_NONE;
         s_peri_tx_sub = false;
         s_peri_status_sub = false;
+        s_link_encrypted = false;
+        s_link_bonded = false;
         ble_conn_cb_t cb = s_peri_conn_cb;
         portEXIT_CRITICAL(&s_ble_mux);
         if (cb != nullptr) {
@@ -548,6 +759,13 @@ static int periGapEvent(struct ble_gap_event* event, void* /*arg*/)
             periScheduleAdvertiseRestart();
         }
         return 0;
+
+    case BLE_GAP_EVENT_ENC_CHANGE:
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+    case BLE_GAP_EVENT_PASSKEY_ACTION: {
+        const int sec_rc = handleSecGapCommon(event);
+        return (sec_rc < 0) ? 0 : sec_rc;
+    }
 
     default:
         return 0;
@@ -807,10 +1025,18 @@ static int centGapEvent(struct ble_gap_event* event, void* /*arg*/)
         }
         portENTER_CRITICAL(&s_ble_mux);
         s_cent_conn = event->connect.conn_handle;
+        s_link_encrypted = false;
+        s_link_bonded = false;
         ble_conn_cb_t cb = s_cent_conn_cb;
         uint16_t handle = s_cent_conn;
         portEXIT_CRITICAL(&s_ble_mux);
         ESP_LOGI(TAG, "cent connected handle=%u", (unsigned)handle);
+        {
+            const ble_sec_cfg_t* sec = activeBleSec();
+            if (sec != nullptr && sec->enable && sec->auto_encrypt_on_connect) {
+                (void)bleRequestEncryption(handle);
+            }
+        }
         if (cb != nullptr) {
             cb(true, handle);
         }
@@ -823,6 +1049,8 @@ static int centGapEvent(struct ble_gap_event* event, void* /*arg*/)
         portENTER_CRITICAL(&s_ble_mux);
         s_cent_conn  = BLE_HS_CONN_HANDLE_NONE;
         s_cent_ready = false;
+        s_link_encrypted = false;
+        s_link_bonded = false;
         ble_conn_cb_t cb = s_cent_conn_cb;
         portEXIT_CRITICAL(&s_ble_mux);
         if (cb != nullptr) {
@@ -860,6 +1088,13 @@ static int centGapEvent(struct ble_gap_event* event, void* /*arg*/)
         return 0;
     }
 
+    case BLE_GAP_EVENT_ENC_CHANGE:
+    case BLE_GAP_EVENT_REPEAT_PAIRING:
+    case BLE_GAP_EVENT_PASSKEY_ACTION: {
+        const int sec_rc = handleSecGapCommon(event);
+        return (sec_rc < 0) ? 0 : sec_rc;
+    }
+
     default:
         return 0;
     }
@@ -893,6 +1128,10 @@ esp_err_t BlePeripheral::init()
     loadUuidsFromCfg(m_config);
     s_peri_conn_cb    = m_conn_cb;
     s_peri_rx_cb      = m_rx_cb;
+    s_auth_cb         = m_auth_cb;
+    s_passkey_cb      = m_passkey_cb;
+    s_link_encrypted  = false;
+    s_link_bonded     = false;
     s_peri            = this;
     s_peri_tx_sub     = false;
     s_peri_status_sub = false;
@@ -912,6 +1151,7 @@ esp_err_t BlePeripheral::init()
     ble_hs_cfg.reset_cb        = onResetCommon;
     ble_hs_cfg.sync_cb         = onSyncCommon;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    applyNimbleSm(m_config.sec);
     ble_store_config_init();
     ble_svc_gap_init();
     ble_svc_gatt_init();
@@ -1045,6 +1285,53 @@ void BlePeripheral::setRxCallback(ble_data_cb_t cb)
     portEXIT_CRITICAL(&s_ble_mux);
 }
 
+void BlePeripheral::setAuthCallback(ble_auth_cb_t cb)
+{
+    m_auth_cb = cb;
+    s_auth_cb = cb;
+}
+
+void BlePeripheral::setPasskeyDisplayCallback(ble_passkey_cb_t cb)
+{
+    m_passkey_cb = cb;
+    s_passkey_cb = cb;
+}
+
+esp_err_t BlePeripheral::requestEncryption()
+{
+    if (!m_inited) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return bleRequestEncryption(s_peri_conn);
+}
+
+int BlePeripheral::getBondCount() const
+{
+    return bleBondCount();
+}
+
+esp_err_t BlePeripheral::removeBond(const ble_bd_addr_t& addr)
+{
+    return bleRemoveBond(addr);
+}
+
+esp_err_t BlePeripheral::clearBonds()
+{
+    return bleClearBonds();
+}
+
+bool BlePeripheral::isEncrypted() const
+{
+    return m_inited && s_link_encrypted;
+}
+
+bool BlePeripheral::isBonded() const
+{
+    return m_inited && s_link_bonded;
+}
+
+
+
 bool BlePeripheral::isConnected() const
 {
     if (!m_inited) {
@@ -1114,6 +1401,10 @@ esp_err_t BleCentral::init()
     s_cent_conn_cb   = m_conn_cb;
     s_cent_tx_cb     = m_tx_cb;
     s_cent_status_cb = m_status_cb;
+    s_auth_cb        = m_auth_cb;
+    s_passkey_cb     = m_passkey_cb;
+    s_link_encrypted = false;
+    s_link_bonded    = false;
     s_cent           = this;
 
     ESP_RETURN_ON_ERROR(ensureNvs(), TAG, "nvs");
@@ -1128,6 +1419,7 @@ esp_err_t BleCentral::init()
     ble_hs_cfg.reset_cb        = onResetCommon;
     ble_hs_cfg.sync_cb         = onSyncCommon;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+    applyNimbleSm(m_config.sec);
     ble_store_config_init();
     ble_svc_gap_init();
     ble_svc_gatt_init();
@@ -1290,6 +1582,53 @@ void BleCentral::setStatusNotifyCallback(ble_data_cb_t cb)
     portEXIT_CRITICAL(&s_ble_mux);
 }
 
+void BleCentral::setAuthCallback(ble_auth_cb_t cb)
+{
+    m_auth_cb = cb;
+    s_auth_cb = cb;
+}
+
+void BleCentral::setPasskeyDisplayCallback(ble_passkey_cb_t cb)
+{
+    m_passkey_cb = cb;
+    s_passkey_cb = cb;
+}
+
+esp_err_t BleCentral::requestEncryption()
+{
+    if (!m_inited) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return bleRequestEncryption(s_cent_conn);
+}
+
+int BleCentral::getBondCount() const
+{
+    return bleBondCount();
+}
+
+esp_err_t BleCentral::removeBond(const ble_bd_addr_t& addr)
+{
+    return bleRemoveBond(addr);
+}
+
+esp_err_t BleCentral::clearBonds()
+{
+    return bleClearBonds();
+}
+
+bool BleCentral::isEncrypted() const
+{
+    return m_inited && s_link_encrypted;
+}
+
+bool BleCentral::isBonded() const
+{
+    return m_inited && s_link_bonded;
+}
+
+
+
 bool BleCentral::isConnected() const
 {
     if (!m_inited) {
@@ -1321,3 +1660,5 @@ const ble_cfg_t& BleCentral::getConfig() const
 {
     return m_config;
 }
+
+#endif /* CONFIG_BT_NIMBLE_ENABLED */

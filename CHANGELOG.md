@@ -9,6 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) fo
 
 ### Added
 
+- `bluedroid_api` provides a Bluedroid GATT peripheral and a Bluedroid GATT central. NimBLE stays a separate host.
+- Example firmware covers Bluedroid, HCI advertising, IDF GATT, and HID bring-up.
 - `sensors/qmc5883p_api` + `qmc5883p_regs` — QMC5883P magnetometer (chip ID `0x80`, I2C `0x2C`)
 - `examples/qmc5883p_example.cpp` and env `esp32-s3-qmc5883p-example`
 - `esp32-s3-hmc5883l-example` build. It flashes `examples/hmc5883l_example.cpp` alone.

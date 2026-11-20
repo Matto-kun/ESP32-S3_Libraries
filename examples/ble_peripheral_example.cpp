@@ -55,7 +55,8 @@ extern "C" void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "Advertising as \"%s\"", cfg.device_name);
+    ESP_LOGI(TAG, "Advertising as \"%s\"", /* To enable pairing: cfg.sec.enable = true; (SC+MITM+bond, passkey 123456). */
+    cfg.device_name);
 
     uint32_t beat = 0;
     while (true) {
